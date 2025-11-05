@@ -1,0 +1,19 @@
+{
+    "node": "n8n-nodes-base.solanaX402Client",
+    "nodeVersion": "1.0",
+    "codexVersion": "1.0",
+    "categories": ["Finance & Accounting"],
+    "resources": {
+      "credentialDocumentation": [
+        {
+          "url": "https://github.com/YOUR_USERNAME/n8n-nodes-solana-x402-client"
+        }
+      ],
+      "primaryDocumentation": [
+        {
+          "url": "https://github.com/YOUR_USERNAME/n8n-nodes-solana-x402-client/blob/main/README.md"
+        }
+      ]
+    },
+    "alias": ["Solana", "x402", "Payment", "Client", "SOL"]
+  }
