@@ -4,9 +4,9 @@ import {
   } from 'n8n-workflow';
   
   export class SolanaX402ClientApi implements ICredentialType {
-    name = 'solanaX402ClientApi';
-    displayName = 'Solana x402 Client';
-    documentationUrl = 'https://github.com/YOUR_USERNAME/n8n-nodes-solana-x402-client';
+    name = 'pocketNodeClientApi';
+    displayName = 'Pocket node client';
+    documentationUrl = 'https://github.com/blockchain-hq/x402-pocket-node-client';
     
     properties: INodeProperties[] = [
       {

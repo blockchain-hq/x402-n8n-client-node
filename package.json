@@ -1,5 +1,5 @@
 {
-	"name": "@blockchainhq-xyz/n8n-nodes-solana-x402-client",
+	"name": "@blockchainhq-xyz/n8n-nodes-pocket-client",
 	"version": "1.0.0",
 	"description": "n8n node for making SOL payments via x402 protocol",
 	"keywords": [
@@ -11,13 +11,13 @@
 	  "client"
 	],
 	"license": "MIT",
-	"homepage": "https://github.com/blockchain-hq/x402-n8n-client-node",
+	"homepage": "https://github.com/blockchain-hq/x402-pocket-node-client",
 	"author": {
 	  "name": "Mahima Thacker"
 	},
 	"repository": {
 	  "type": "git",
-	  "url": "https://github.com/blockchain-hq/x402-n8n-client-node.git"
+	  "url": "https://github.com/blockchain-hq/x402-pocket-node-client.git"
 	},
 	"main": "index.js",
 	"scripts": {

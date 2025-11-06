@@ -12,21 +12,21 @@ import {
   
   export class SolanaX402Client implements INodeType {
     description: INodeTypeDescription = {
-      displayName: 'Solana x402 Client',
-      name: 'solanaX402Client',
-      icon: 'file:solana.svg',
+      displayName: 'Pocket node client',
+      name: 'pocketNodeClient',
+      icon: 'file:pocket.svg',
       group: ['transform'],
       version: 1,
       subtitle: '={{$parameter["operation"]}}',
       description: 'Make SOL payments in response to HTTP 402 errors',
       defaults: {
-        name: 'Solana x402 Client',
+        name: 'Pocket node client',
       },
       inputs: ['main'],
       outputs: ['main'],
       credentials: [
         {
-          name: 'solanaX402ClientApi',
+          name: 'pocketNodeClientApi',
           required: true,
         },
       ],
@@ -129,7 +129,7 @@ import {
       const returnData: INodeExecutionData[] = [];
   
       // Get credentials
-      const credentials = await this.getCredentials('solanaX402ClientApi');
+      const credentials = await this.getCredentials('pocketNodeClientApi');
       
       // Initialize client
       const client = new X402SDK({  // ← Use X402SDK instead
