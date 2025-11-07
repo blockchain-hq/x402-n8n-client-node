@@ -1,7 +1,7 @@
 {
 	"name": "@blockchainhq-xyz/n8n-nodes-pocket-client",
 	"version": "1.0.1",
-	"description": "n8n node for making SOL payments via x402 protocol",
+	"description": "n8n node for making USDC payments via x402 protocol",
 	"keywords": [
 		"n8n-community-node-package",
 		"n8n",
@@ -34,10 +34,10 @@
 	"n8n": {
 		"n8nNodesApiVersion": 1,
 		"credentials": [
-			"dist/credentials/SolanaX402ClientApi.credentials.js"
+			"dist/credentials/PocketNodeWallet.credentials.js"
 		],
 		"nodes": [
-			"dist/nodes/SolanaX402Client/SolanaX402Client.node.js"
+			"dist/nodes/PocketNodeClient/PocketNodeClient.node.js" 
 		]
 	},
 	"dependencies": {

@@ -1,6 +1,6 @@
 # @blockchainhq-xyz/n8n-nodes-pocket-client
 
-n8n community node for making SOL payments in response to HTTP 402 errors. Client-side implementation of x402 protocol.
+n8n community node for making USDC payments in response to HTTP 402 errors. Client-side implementation of x402 protocol.
 
 [![npm version](https://badge.fury.io/js/@blockchainhq-xyz%2Fn8n-nodes-pocket-client.svg)](https://www.npmjs.com/package/@blockchainhq-xyz%2Fn8n-nodes-pocket-client)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -8,7 +8,7 @@ n8n community node for making SOL payments in response to HTTP 402 errors. Clien
 ## What It Does
 
 - Parse 402 payment requirements
-- Make SOL payments automatically
+- Make USDC payments automatically
 - Return transaction signatures
 - Integrate with any 402-enabled API
 
@@ -70,11 +70,11 @@ Extracts payment details from 402 response.
 
 ### 2. Make Payment
 
-Sends SOL to specified address.
+Sends USDC to specified address.
 
 **Input:**
 - Recipient address
-- Amount (SOL)
+- Amount (USDC)
 - Payment ID (optional)
 
 **Output:** Transaction signature
@@ -118,7 +118,7 @@ Get Content
 ```
 HTTP Request → Get 402 from real API
     ↓
-Pocket node client → Parse and Pay (sends SOL)
+Pocket node client → Parse and Pay (sends USDC)
     ↓
 HTTP Request → Retry with X-Payment signature
     ↓
@@ -144,7 +144,7 @@ Get Content
 # Generate wallet
 solana-keygen new -o ~/devnet-wallet.json
 
-# Get SOL
+# Get SOL (for transaction fees)
 solana airdrop 2 YOUR_ADDRESS --url devnet
 
 # Get private key
@@ -153,7 +153,7 @@ cat ~/devnet-wallet.json
 
 **Mainnet (Production):**
 - Use existing wallet
-- Ensure sufficient SOL balance
+- Ensure sufficient USDC balance (and SOL for transaction fees)
 - Keep private key secure
 
 ## Full Payment Flow
@@ -181,18 +181,19 @@ cat ~/devnet-wallet.json
 |-------|-----|
 | Node not visible | Restart n8n, clear cache |
 | Invalid private key | Use base58 format |
-| Insufficient balance | Get more SOL (airdrop/purchase) |
+| Insufficient balance | Get more USDC (and SOL for fees) |
 | Transaction failed | Check network and balance |
 
 ## Networks
 
 **Devnet:**
 - Free testing
-- Get SOL via airdrop
+- Get SOL via airdrop (for transaction fees)
+- Get USDC from faucets or swaps
 - Same as mainnet
 
 **Mainnet:**
-- Real SOL
+- Real USDC
 - Purchase from exchange
 - Production ready
 
@@ -205,7 +206,7 @@ cat ~/devnet-wallet.json
 
 - n8n: v0.220.0+
 - Node.js: v18+
-- SOL balance for payments
+- USDC balance for payments (and SOL for transaction fees)
 
 ## License
 
