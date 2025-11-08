@@ -37,10 +37,10 @@ export class PocketNodeClient implements INodeType {
     ],
     properties: [
       {
-        displayName: 'Notice',
+        displayName: 'No wallet configured? A wallet will be auto-generated. IMPORTANT: Workflow must be SAVED AND ACTIVE for wallet to persist. To get wallet address: 1) Keep workflow active & saved, 2) Select "Get Wallet Info" mode, 3) Check executions to see the output, 4) Fund with SOL & USDC. Or, add Pocket Node Wallet credential.',
         name: 'notice',
         type: 'notice',
-        default: 'No wallet configured? A wallet will be auto-generated and stored in this workflow. It will persist across executions, so you can fund it once with USDC. For a shared wallet across workflows, add Pocket Node Wallet credential.',
+        default: '',
       },
       {
         displayName: 'Mode',
@@ -111,9 +111,17 @@ export class PocketNodeClient implements INodeType {
       isSaved: !!workflow.id && workflow.id !== 'unsaved'
     };
     
-    // Warn if workflow might not be saved
+    // Warn if workflow is not saved
     if (!workflowInfo.isSaved) {
-      console.warn('⚠️ Workflow appears to be unsaved. Workflow static data only persists for SAVED workflows in n8n.');
+      console.warn('⚠️ Workflow appears to be unsaved. Workflow static data only persists for SAVED and ACTIVE workflows in n8n.');
+      console.warn('⚠️ For testing: Save the workflow first (Ctrl/Cmd+S), then activate it. The auto-generated wallet will persist across executions only in active workflows.');
+    }
+    
+    // Warn if workflow is saved but not active
+    if (workflowInfo.isSaved && !workflowInfo.active) {
+      console.warn('⚠️ Workflow is saved but not active. Workflow static data only persists for ACTIVE workflows in n8n.');
+      console.warn('⚠️ The auto-generated wallet will NOT persist across executions. Activate the workflow (toggle switch) or use Pocket Node Wallet credential instead.');
+      console.warn('⚠️ For manual testing: Activate the workflow, then execute. For persistent wallet without activation, use credentials.');
     }
     
     // Try to get wallet credentials, or use/generate persistent wallet
@@ -184,6 +192,63 @@ export class PocketNodeClient implements INodeType {
         if (autoFund && network === 'devnet') {
           workflowData.autoFundRequested = true;
           workflowData.autoFundTimestamp = new Date().toISOString();
+          
+          // Actually request funding from faucets
+          try {
+            // Request SOL first
+            console.log(`🪙 Requesting SOL from Solana faucet for wallet: ${walletAddress}`);
+            const solResponse = await fetch('https://faucet.solana.com/', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                address: walletAddress,
+                network: 'devnet',
+              }),
+            });
+            
+            const solResult = await solResponse.json();
+            if (solResponse.ok) {
+              console.log(`✅ SOL requested successfully: ${JSON.stringify(solResult)}`);
+              workflowData.solFunded = true;
+              workflowData.solFundTimestamp = new Date().toISOString();
+            } else {
+              console.warn(`⚠️ SOL faucet request failed: ${JSON.stringify(solResult)}`);
+              workflowData.solFundError = solResult.error || 'Unknown error';
+            }
+            
+            // Wait a bit before requesting USDC
+            await new Promise(resolve => setTimeout(resolve, 2000));
+            
+            // Request USDC from Circle faucet
+            console.log(`💵 Requesting USDC from Circle faucet for wallet: ${walletAddress}`);
+            const usdcResponse = await fetch('https://faucet.circle.com/', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                address: walletAddress,
+                network: 'devnet',
+                asset: 'USDC',
+              }),
+            });
+            
+            const usdcResult = await usdcResponse.json();
+            if (usdcResponse.ok) {
+              console.log(`✅ USDC requested successfully: ${JSON.stringify(usdcResult)}`);
+              workflowData.usdcFunded = true;
+              workflowData.usdcFundTimestamp = new Date().toISOString();
+            } else {
+              console.warn(`⚠️ USDC faucet request failed: ${JSON.stringify(usdcResult)}`);
+              workflowData.usdcFundError = usdcResult.error || 'Unknown error';
+            }
+          } catch (error) {
+            console.error(`❌ Auto-fund error: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            workflowData.autoFundError = error instanceof Error ? error.message : 'Unknown error';
+            // Don't throw - allow workflow to continue even if auto-fund fails
+          }
         }
       } else {
         // Use existing stored wallet
@@ -201,6 +266,27 @@ export class PocketNodeClient implements INodeType {
       network: network,
     });
 
+    // Helper function to get wallet info for all outputs
+    const getWalletInfoOutput = async () => {
+      const solBalance = await client.getBalance();
+      return {
+        walletAddress: walletAddress,
+        network: network,
+        solBalance: solBalance,
+        isAutoGeneratedWallet: isAutoGeneratedWallet,
+        fundingInstructions: isAutoGeneratedWallet 
+          ? {
+              message: 'This is an auto-generated wallet. Fund it with USDC and SOL to enable payments.',
+              devnetFaucet: 'https://faucet.circle.com/',
+              solFaucet: network === 'devnet' ? 'https://faucet.solana.com/' : null,
+              walletAddress: walletAddress,
+            }
+          : {
+              message: 'Using configured credential wallet.',
+            },
+      };
+    };
+
     for (let i = 0; i < items.length; i++) {
       try {
         const inputData = items[i].json;
@@ -214,13 +300,15 @@ export class PocketNodeClient implements INodeType {
             inputData.x402Version !== undefined;
 
           if (!is402) {
-            // Not a 402 response, pass through
+            // Not a 402 response, pass through - but include wallet info so user knows the address
+            const walletInfo = await getWalletInfoOutput();
             returnData.push({
               json: {
                 ...inputData,
                 _pocketNode: {
                   action: 'passthrough',
-                  reason: 'Not a 402 response'
+                  reason: 'Not a 402 response',
+                  ...walletInfo,
                 }
               },
               pairedItem: { item: i },
@@ -258,9 +346,59 @@ export class PocketNodeClient implements INodeType {
 
           // Only check USDC balance (SOL will be needed for fees but we'll let the transaction fail naturally if insufficient)
           if (requiredAmount > 0 && usdcBalance < requiredAmount) {
+            const walletInfo = await getWalletInfoOutput();
+            
+            // For auto-generated wallets with zero balance, return wallet info instead of failing
+            // This allows users to see the wallet address and fund it without the workflow failing
+            if (isAutoGeneratedWallet && (usdcBalance === 0 || walletInfo.solBalance === 0)) {
+              returnData.push({
+                json: {
+                  paymentRequired: true,
+                  paymentStatus: 'insufficient_balance',
+                  requiredAmount: requiredAmount,
+                  currentBalance: {
+                    usdc: usdcBalance,
+                    sol: walletInfo.solBalance,
+                  },
+                  message: `Wallet needs funding before payment can be made.`,
+                  fundingInstructions: {
+                    walletAddress: walletAddress,
+                    network: network,
+                    steps: [
+                      `1. Get USDC: https://faucet.circle.com/ (Solana Devnet)`,
+                      `2. Get SOL: https://faucet.solana.com/ (Devnet)`,
+                      `3. Send to wallet: ${walletAddress}`,
+                      `4. Wait 10-30 seconds for confirmation, then retry this workflow.`,
+                    ],
+                  },
+                  _pocketNode: {
+                    action: 'wallet_needs_funding',
+                    ...walletInfo,
+                  },
+                },
+                pairedItem: { item: i },
+              });
+              continue;
+            }
+            
+            // For credential wallets or if balance exists but is insufficient, throw error
+            const errorMessage = `Insufficient USDC balance.\n\n` +
+              `💰 WALLET ADDRESS: ${walletAddress}\n` +
+              `Current Balance: ${usdcBalance} USDC\n` +
+              `Required: ${requiredAmount} USDC\n` +
+              `SOL Balance: ${walletInfo.solBalance} SOL\n\n` +
+              `Note: SOL is required for transaction fees. Ensure you have SOL in addition to USDC.\n\n` +
+              (isAutoGeneratedWallet 
+                ? `🔧 FUND THIS WALLET:\n` +
+                  `1. Get USDC: https://faucet.circle.com/ (Solana Devnet)\n` +
+                  `2. Get SOL: https://faucet.solana.com/ (Devnet)\n` +
+                  `3. Send to wallet: ${walletAddress}\n` +
+                  `4. Wait 10-30 seconds for confirmation, then retry.`
+                : `Fund your wallet with USDC and SOL, then retry.`);
+            
             throw new NodeOperationError(
               this.getNode(),
-              `Insufficient USDC balance. Wallet: ${walletAddress} | Balance: ${usdcBalance} USDC | Required: ${requiredAmount} USDC\n\nNote: SOL is required for transaction fees. Ensure you have SOL in addition to USDC.`,
+              errorMessage,
               { itemIndex: i }
             );
           }
@@ -274,35 +412,72 @@ export class PocketNodeClient implements INodeType {
             let errorReason = 'payment_failed';
             const errorLower = paymentResult.error?.toLowerCase() || '';
             
+            // Get wallet info for error messages
+            const walletInfo = await getWalletInfoOutput();
+            const solBalance = walletInfo.solBalance;
+            
             // Check if it's a "no record of prior credit" error - means sender's token account doesn't exist
             if (errorLower.includes('no record of a prior credit') || errorLower.includes('no record of prior credit') || errorLower.includes('attempt to debit')) {
               errorReason = 'sender_token_account_missing';
               errorMessage = `Payment failed: USDC token account not found.\n\n` +
-                `Wallet: ${walletAddress} | Balance: ${usdcBalance} USDC | Required: ${requiredAmount} USDC\n\n` +
+                `💰 WALLET ADDRESS: ${walletAddress}\n` +
+                `Current Balance: ${usdcBalance} USDC | Required: ${requiredAmount} USDC\n` +
+                `SOL Balance: ${solBalance} SOL\n\n` +
                 `Note: SOL is required for transaction fees. Ensure you have SOL in addition to USDC.\n\n` +
-                `Fix: Receive USDC to this wallet first (creates token account). Wait 10-30 seconds, then retry.`;
+                (isAutoGeneratedWallet 
+                  ? `🔧 FUND THIS WALLET:\n` +
+                    `1. Get USDC: https://faucet.circle.com/ (Solana Devnet)\n` +
+                    `2. Get SOL: https://faucet.solana.com/ (Devnet)\n` +
+                    `3. Send to wallet: ${walletAddress}\n` +
+                    `4. Wait 10-30 seconds for confirmation, then retry.`
+                  : `Fix: Receive USDC to this wallet first (creates token account). Wait 10-30 seconds, then retry.`);
             }
             // Check if it's an invalid account data error (USDC token account issue)
             else if (errorLower.includes('invalid account data') || errorLower.includes('invalidaccountdata')) {
               errorReason = 'invalid_usdc_account';
               errorMessage = `Payment failed: USDC token account issue.\n\n` +
-                `Wallet: ${walletAddress} | Balance: ${usdcBalance} USDC | Required: ${requiredAmount} USDC\n\n` +
+                `💰 WALLET ADDRESS: ${walletAddress}\n` +
+                `Current Balance: ${usdcBalance} USDC | Required: ${requiredAmount} USDC\n` +
+                `SOL Balance: ${solBalance} SOL\n\n` +
                 `Note: SOL is required for transaction fees. Ensure you have SOL in addition to USDC.\n\n` +
-                `Fix: Get USDC from https://faucet.circle.com/ (Solana Devnet) to wallet ${walletAddress}`;
+                (isAutoGeneratedWallet 
+                  ? `🔧 FUND THIS WALLET:\n` +
+                    `1. Get USDC: https://faucet.circle.com/ (Solana Devnet)\n` +
+                    `2. Get SOL: https://faucet.solana.com/ (Devnet)\n` +
+                    `3. Send to wallet: ${walletAddress}\n` +
+                    `4. Wait 10-30 seconds for confirmation, then retry.`
+                  : `Fix: Get USDC from https://faucet.circle.com/ (Solana Devnet) to wallet ${walletAddress}`);
             }
             // Check if it's a balance-related error
             else if (errorLower.includes('debit') || errorLower.includes('credit') || errorLower.includes('insufficient')) {
               errorReason = 'insufficient_balance';
-              errorMessage += `\n\nInsufficient balance.\n\n` +
-                `Wallet: ${walletAddress} | Balance: ${usdcBalance} USDC | Required: ${requiredAmount} USDC\n\n` +
+              errorMessage = `Payment failed: ${paymentResult.error}\n\n` +
+                `💰 WALLET ADDRESS: ${walletAddress}\n` +
+                `Current Balance: ${usdcBalance} USDC | Required: ${requiredAmount} USDC\n` +
+                `SOL Balance: ${solBalance} SOL\n\n` +
                 `Note: SOL is required for transaction fees. Ensure you have SOL in addition to USDC.\n\n` +
-                `Fix: Get USDC from https://faucet.circle.com/ (Solana Devnet)`;
+                (isAutoGeneratedWallet 
+                  ? `🔧 FUND THIS WALLET:\n` +
+                    `1. Get USDC: https://faucet.circle.com/ (Solana Devnet)\n` +
+                    `2. Get SOL: https://faucet.solana.com/ (Devnet)\n` +
+                    `3. Send to wallet: ${walletAddress}\n` +
+                    `4. Wait 10-30 seconds for confirmation, then retry.`
+                  : `Fix: Get USDC from https://faucet.circle.com/ (Solana Devnet)`);
             }
             // Generic error with context
             else {
-              errorMessage += `\n\nWallet: ${walletAddress} | Balance: ${usdcBalance} USDC | Required: ${requiredAmount} USDC\n\n` +
+              errorMessage = `Payment failed: ${paymentResult.error}\n\n` +
+                `💰 WALLET ADDRESS: ${walletAddress}\n` +
+                `Current Balance: ${usdcBalance} USDC | Required: ${requiredAmount} USDC\n` +
+                `SOL Balance: ${solBalance} SOL\n\n` +
                 `Note: SOL is required for transaction fees. Ensure you have SOL in addition to USDC.\n\n` +
-                `Fix: Get USDC from https://faucet.circle.com/ (Solana Devnet)`;
+                (isAutoGeneratedWallet 
+                  ? `🔧 FUND THIS WALLET:\n` +
+                    `1. Get USDC: https://faucet.circle.com/ (Solana Devnet)\n` +
+                    `2. Get SOL: https://faucet.solana.com/ (Devnet)\n` +
+                    `3. Send to wallet: ${walletAddress}\n` +
+                    `4. Wait 10-30 seconds for confirmation, then retry.`
+                  : `Fix: Get USDC from https://faucet.circle.com/ (Solana Devnet)`);
             }
             
             // Throw error - workflow fails
@@ -315,6 +490,7 @@ export class PocketNodeClient implements INodeType {
 
           // Create payment header
           const paymentHeader = client.createPaymentHeader(paymentResult.signature!);
+          const walletInfo = await getWalletInfoOutput();
 
           returnData.push({
             json: {
@@ -329,11 +505,7 @@ export class PocketNodeClient implements INodeType {
               },
               _pocketNode: {
                 action: 'payment_completed',
-                walletUsed: walletAddress,
-                isAutoGeneratedWallet: isAutoGeneratedWallet,
-                walletInfo: isAutoGeneratedWallet 
-                  ? 'Using auto-generated wallet stored in workflow. Fund it with USDC to enable payments. Use Circle\'s faucet: https://faucet.circle.com/'
-                  : 'Using configured credential wallet.',
+                ...walletInfo,
               },
             },
             pairedItem: { item: i },
@@ -366,9 +538,24 @@ export class PocketNodeClient implements INodeType {
 
           // Only check USDC balance (SOL will be needed for fees but we'll let the transaction fail naturally if insufficient)
           if (requiredAmount > 0 && usdcBalance < requiredAmount) {
+            const walletInfo = await getWalletInfoOutput();
+            const errorMessage = `Insufficient USDC balance.\n\n` +
+              `💰 WALLET ADDRESS: ${walletAddress}\n` +
+              `Current Balance: ${usdcBalance} USDC\n` +
+              `Required: ${requiredAmount} USDC\n` +
+              `SOL Balance: ${walletInfo.solBalance} SOL\n\n` +
+              `Note: SOL is required for transaction fees. Ensure you have SOL in addition to USDC.\n\n` +
+              (isAutoGeneratedWallet 
+                ? `🔧 FUND THIS WALLET:\n` +
+                  `1. Get USDC: https://faucet.circle.com/ (Solana Devnet)\n` +
+                  `2. Get SOL: https://faucet.solana.com/ (Devnet)\n` +
+                  `3. Send to wallet: ${walletAddress}\n` +
+                  `4. Wait 10-30 seconds for confirmation, then retry.`
+                : `Fund your wallet with USDC and SOL, then retry.`);
+            
             throw new NodeOperationError(
               this.getNode(),
-              `Insufficient USDC balance. Wallet: ${walletAddress} | Balance: ${usdcBalance} USDC | Required: ${requiredAmount} USDC\n\nNote: SOL is required for transaction fees. Ensure you have SOL in addition to USDC.`,
+              errorMessage,
               { itemIndex: i }
             );
           }
@@ -381,35 +568,72 @@ export class PocketNodeClient implements INodeType {
             let errorReason = 'payment_failed';
             const errorLower = paymentResult.error?.toLowerCase() || '';
             
+            // Get wallet info for error messages
+            const walletInfo = await getWalletInfoOutput();
+            const solBalance = walletInfo.solBalance;
+            
             // Check if it's a "no record of prior credit" error - means sender's token account doesn't exist
             if (errorLower.includes('no record of a prior credit') || errorLower.includes('no record of prior credit') || errorLower.includes('attempt to debit')) {
               errorReason = 'sender_token_account_missing';
               errorMessage = `Payment failed: USDC token account not found.\n\n` +
-                `Wallet: ${walletAddress} | Balance: ${usdcBalance} USDC | Required: ${requiredAmount} USDC\n\n` +
+                `💰 WALLET ADDRESS: ${walletAddress}\n` +
+                `Current Balance: ${usdcBalance} USDC | Required: ${requiredAmount} USDC\n` +
+                `SOL Balance: ${solBalance} SOL\n\n` +
                 `Note: SOL is required for transaction fees. Ensure you have SOL in addition to USDC.\n\n` +
-                `Fix: Receive USDC to this wallet first (creates token account). Wait 10-30 seconds, then retry.`;
+                (isAutoGeneratedWallet 
+                  ? `🔧 FUND THIS WALLET:\n` +
+                    `1. Get USDC: https://faucet.circle.com/ (Solana Devnet)\n` +
+                    `2. Get SOL: https://faucet.solana.com/ (Devnet)\n` +
+                    `3. Send to wallet: ${walletAddress}\n` +
+                    `4. Wait 10-30 seconds for confirmation, then retry.`
+                  : `Fix: Receive USDC to this wallet first (creates token account). Wait 10-30 seconds, then retry.`);
             }
             // Check if it's an invalid account data error (USDC token account issue)
             else if (errorLower.includes('invalid account data') || errorLower.includes('invalidaccountdata')) {
               errorReason = 'invalid_usdc_account';
               errorMessage = `Payment failed: USDC token account issue.\n\n` +
-                `Wallet: ${walletAddress} | Balance: ${usdcBalance} USDC | Required: ${requiredAmount} USDC\n\n` +
+                `💰 WALLET ADDRESS: ${walletAddress}\n` +
+                `Current Balance: ${usdcBalance} USDC | Required: ${requiredAmount} USDC\n` +
+                `SOL Balance: ${solBalance} SOL\n\n` +
                 `Note: SOL is required for transaction fees. Ensure you have SOL in addition to USDC.\n\n` +
-                `Fix: Get USDC from https://faucet.circle.com/ (Solana Devnet) to wallet ${walletAddress}`;
+                (isAutoGeneratedWallet 
+                  ? `🔧 FUND THIS WALLET:\n` +
+                    `1. Get USDC: https://faucet.circle.com/ (Solana Devnet)\n` +
+                    `2. Get SOL: https://faucet.solana.com/ (Devnet)\n` +
+                    `3. Send to wallet: ${walletAddress}\n` +
+                    `4. Wait 10-30 seconds for confirmation, then retry.`
+                  : `Fix: Get USDC from https://faucet.circle.com/ (Solana Devnet) to wallet ${walletAddress}`);
             }
             // Check if it's a balance-related error
             else if (errorLower.includes('debit') || errorLower.includes('credit') || errorLower.includes('insufficient')) {
               errorReason = 'insufficient_balance';
-              errorMessage += `\n\nInsufficient balance.\n\n` +
-                `Wallet: ${walletAddress} | Balance: ${usdcBalance} USDC | Required: ${requiredAmount} USDC\n\n` +
+              errorMessage = `Payment failed: ${paymentResult.error}\n\n` +
+                `💰 WALLET ADDRESS: ${walletAddress}\n` +
+                `Current Balance: ${usdcBalance} USDC | Required: ${requiredAmount} USDC\n` +
+                `SOL Balance: ${solBalance} SOL\n\n` +
                 `Note: SOL is required for transaction fees. Ensure you have SOL in addition to USDC.\n\n` +
-                `Fix: Get USDC from https://faucet.circle.com/ (Solana Devnet)`;
+                (isAutoGeneratedWallet 
+                  ? `🔧 FUND THIS WALLET:\n` +
+                    `1. Get USDC: https://faucet.circle.com/ (Solana Devnet)\n` +
+                    `2. Get SOL: https://faucet.solana.com/ (Devnet)\n` +
+                    `3. Send to wallet: ${walletAddress}\n` +
+                    `4. Wait 10-30 seconds for confirmation, then retry.`
+                  : `Fix: Get USDC from https://faucet.circle.com/ (Solana Devnet)`);
             }
             // Generic error with context
             else {
-              errorMessage += `\n\nWallet: ${walletAddress} | Balance: ${usdcBalance} USDC | Required: ${requiredAmount} USDC\n\n` +
+              errorMessage = `Payment failed: ${paymentResult.error}\n\n` +
+                `💰 WALLET ADDRESS: ${walletAddress}\n` +
+                `Current Balance: ${usdcBalance} USDC | Required: ${requiredAmount} USDC\n` +
+                `SOL Balance: ${solBalance} SOL\n\n` +
                 `Note: SOL is required for transaction fees. Ensure you have SOL in addition to USDC.\n\n` +
-                `Fix: Get USDC from https://faucet.circle.com/ (Solana Devnet)`;
+                (isAutoGeneratedWallet 
+                  ? `🔧 FUND THIS WALLET:\n` +
+                    `1. Get USDC: https://faucet.circle.com/ (Solana Devnet)\n` +
+                    `2. Get SOL: https://faucet.solana.com/ (Devnet)\n` +
+                    `3. Send to wallet: ${walletAddress}\n` +
+                    `4. Wait 10-30 seconds for confirmation, then retry.`
+                  : `Fix: Get USDC from https://faucet.circle.com/ (Solana Devnet)`);
             }
             
             // Throw error - workflow fails
@@ -421,6 +645,7 @@ export class PocketNodeClient implements INodeType {
           }
 
           const paymentHeader = client.createPaymentHeader(paymentResult.signature!);
+          const walletInfo = await getWalletInfoOutput();
 
           returnData.push({
             json: {
@@ -430,11 +655,8 @@ export class PocketNodeClient implements INodeType {
               recipient: paymentResult.recipient,
               paymentHeader: paymentHeader,
               _pocketNode: {
-                walletUsed: walletAddress,
-                isAutoGeneratedWallet: isAutoGeneratedWallet,
-                walletInfo: isAutoGeneratedWallet 
-                  ? 'Using auto-generated wallet stored in workflow. Fund it with USDC to enable payments. Use Circle\'s faucet: https://faucet.circle.com/'
-                  : 'Using configured credential wallet.',
+                action: 'payment_completed',
+                ...walletInfo,
               },
             },
             pairedItem: { item: i },
@@ -442,29 +664,26 @@ export class PocketNodeClient implements INodeType {
 
         } else if (mode === 'walletInfo') {
           // Get wallet info and balances
-          const walletInfo = client.getWalletInfo();
-          const solBalance = await client.getBalance();
+          const walletInfo = await getWalletInfoOutput();
           
           let usdcBalance = 0;
           if (inputData.x402Version && inputData.accepts?.[0]?.asset) {
-            usdcBalance = await client.getUSDCBalance(inputData.accepts[0].asset);
+            try {
+              usdcBalance = await client.getUSDCBalance(inputData.accepts[0].asset);
+            } catch (error) {
+              // USDC balance might not be available if token account doesn't exist
+            }
           }
 
           returnData.push({
             json: {
-              address: walletInfo.address,
-              network: walletInfo.network,
+              address: walletAddress,
+              network: network,
               balances: {
-                sol: solBalance,
+                sol: walletInfo.solBalance,
                 usdc: usdcBalance,
               },
-              _pocketNode: {
-                isAutoGeneratedWallet: isAutoGeneratedWallet,
-                walletInfo: isAutoGeneratedWallet 
-                  ? 'Using auto-generated wallet stored in workflow. Fund it with USDC to enable payments. Use Circle\'s faucet: https://faucet.circle.com/'
-                  : 'Using configured credential wallet.',
-                walletAddress: walletAddress,
-              },
+              _pocketNode: walletInfo,
             },
             pairedItem: { item: i },
           });
@@ -472,12 +691,33 @@ export class PocketNodeClient implements INodeType {
 
       } catch (error) {
         if (this.continueOnFail()) {
-          returnData.push({
-            json: {
-              error: error instanceof Error ? error.message : 'Unknown error',
-            },
-            pairedItem: { item: i },
-          });
+          // Include wallet info in error output so user can see the address even on failure
+          try {
+            const walletInfo = await getWalletInfoOutput();
+            returnData.push({
+              json: {
+                error: error instanceof Error ? error.message : 'Unknown error',
+                _pocketNode: {
+                  action: 'error',
+                  ...walletInfo,
+                },
+              },
+              pairedItem: { item: i },
+            });
+          } catch (walletError) {
+            // If we can't get wallet info, just return the error
+            returnData.push({
+              json: {
+                error: error instanceof Error ? error.message : 'Unknown error',
+                _pocketNode: {
+                  action: 'error',
+                  walletAddress: walletAddress,
+                  isAutoGeneratedWallet: isAutoGeneratedWallet,
+                },
+              },
+              pairedItem: { item: i },
+            });
+          }
           continue;
         }
         throw error;
